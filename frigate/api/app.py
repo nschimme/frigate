@@ -457,6 +457,7 @@ def ffmpeg_presets():
         "preset-record-generic",
         "preset-record-generic-audio-copy",
         "preset-record-generic-audio-aac",
+        "preset-record-generic-audio-faac",
         "preset-record-mjpeg",
         "preset-record-jpeg",
         "preset-record-ubiquiti",

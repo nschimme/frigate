@@ -200,6 +200,20 @@ fi
 apt-get -qq install --no-install-recommends --no-install-suggests -y \
     libvulkan1 mesa-vulkan-drivers
 
+# install faac from source
+apt-get -qq install --no-install-recommends -y ninja-build
+python3 -m pip install meson
+mkdir -p /tmp/faac
+wget -qO /tmp/faac.tar.gz https://github.com/knik0/faac/archive/6e291e5c436ee5a671aec9e71af11be4837ece06.tar.gz
+tar -xzf /tmp/faac.tar.gz -C /tmp/faac --strip-components 1
+mkdir -p /tmp/faac/build
+cd /tmp/faac/build
+meson setup ..
+ninja
+ninja install
+ldconfig
+rm -rf /tmp/faac /tmp/faac.tar.gz
+
 apt-get purge gnupg apt-transport-https xz-utils -y
 apt-get clean autoclean -y
 apt-get autoremove --purge -y
