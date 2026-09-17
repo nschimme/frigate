@@ -9,6 +9,25 @@ from frigate.util.faac import (
 )
 
 
+def _parse_audio_params_from_cmd(ffmpeg_cmd: list[str]) -> tuple[int, int]:
+    sample_rate = 16000
+    channels = 1
+
+    for i, arg in enumerate(ffmpeg_cmd):
+        if arg == "-ar" and i + 1 < len(ffmpeg_cmd):
+            try:
+                sample_rate = int(ffmpeg_cmd[i + 1])
+            except ValueError:
+                pass
+        elif arg == "-ac" and i + 1 < len(ffmpeg_cmd):
+            try:
+                channels = int(ffmpeg_cmd[i + 1])
+            except ValueError:
+                pass
+
+    return sample_rate, channels
+
+
 class TestFaac(unittest.TestCase):
     def test_resolve_faac_path_custom(self):
         self.assertEqual(resolve_faac_path("/custom/bin/faac"), "/custom/bin/faac")
@@ -18,6 +37,17 @@ class TestFaac(unittest.TestCase):
         mock_which.returncode = 0
         mock_which.return_value = "/usr/bin/faac"
         self.assertEqual(resolve_faac_path("default"), "/usr/bin/faac")
+
+    def test_parse_audio_params_from_cmd(self):
+        cmd1 = ["ffmpeg", "-i", "rtsp://camera", "-ar", "44100", "-ac", "2", "-c:a", "aac"]
+        sr, ch = _parse_audio_params_from_cmd(cmd1)
+        self.assertEqual(sr, 44100)
+        self.assertEqual(ch, 2)
+
+        cmd2 = ["ffmpeg", "-i", "rtsp://camera", "-c:a", "aac"]
+        sr2, ch2 = _parse_audio_params_from_cmd(cmd2)
+        self.assertEqual(sr2, 16000)
+        self.assertEqual(ch2, 1)
 
     def test_build_faac_cmd_default(self):
         cmd = build_faac_cmd(
@@ -37,7 +67,7 @@ class TestFaac(unittest.TestCase):
             bitrate=64,
             object_type="auto",
             input_file="-",
-            sample_rate=44100,
+            sample_rate=48000,
             channels=2,
             bits_per_sample=16,
         )
@@ -47,7 +77,7 @@ class TestFaac(unittest.TestCase):
                 "/bin/faac",
                 "-P",
                 "-R",
-                "44100",
+                "48000",
                 "-B",
                 "16",
                 "-C",

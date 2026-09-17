@@ -44,6 +44,26 @@ def terminate_ffmpeg_stream(proc: sp.Popen[Any]) -> None:
             proc.wait()
 
 
+def _parse_audio_params_from_cmd(ffmpeg_cmd: list[str]) -> tuple[int, int]:
+    """Dynamically parse sample_rate (-ar) and channels (-ac) from ffmpeg args if present."""
+    sample_rate = 16000
+    channels = 1
+
+    for i, arg in enumerate(ffmpeg_cmd):
+        if arg == "-ar" and i + 1 < len(ffmpeg_cmd):
+            try:
+                sample_rate = int(ffmpeg_cmd[i + 1])
+            except ValueError:
+                pass
+        elif arg == "-ac" and i + 1 < len(ffmpeg_cmd):
+            try:
+                channels = int(ffmpeg_cmd[i + 1])
+            except ValueError:
+                pass
+
+    return sample_rate, channels
+
+
 def start_or_restart_ffmpeg(
     ffmpeg_cmd, logger, logpipe: LogPipe, frame_size=None, ffmpeg_process=None
 ) -> sp.Popen[Any]:
@@ -55,8 +75,10 @@ def start_or_restart_ffmpeg(
     faac_binary = resolve_faac_path("default")
     if faac_binary and any(arg == "aac" for arg in ffmpeg_cmd):
         try:
-            logger.info("Using FAAC encoder at %s for AAC audio output", faac_binary)
-            # Create FAAC command for raw stdin PCM input
+            sample_rate, channels = _parse_audio_params_from_cmd(ffmpeg_cmd)
+            logger.info("Using FAAC encoder at %s for AAC audio output (sample_rate=%d, channels=%d)", faac_binary, sample_rate, channels)
+
+            # Create FAAC command dynamically configured with stream sample_rate and channels
             faac_cmd = build_faac_cmd(
                 faac_path=faac_binary,
                 bitrate=64,
@@ -64,8 +86,10 @@ def start_or_restart_ffmpeg(
                 adts=True,
                 output_file="-",
                 input_file="-",
+                sample_rate=sample_rate,
+                channels=channels,
             )
-            # Replace -c:a aac with -f s16le -ac 2 -ar 44100 pipe:1 for direct stdout piping to FAAC
+            # Replace -c:a aac with raw PCM parameters matching sample_rate and channels
             modified_cmd = []
             skip_next = False
             for i, arg in enumerate(ffmpeg_cmd):
@@ -73,7 +97,7 @@ def start_or_restart_ffmpeg(
                     skip_next = False
                     continue
                 if arg == "-c:a" and i + 1 < len(ffmpeg_cmd) and ffmpeg_cmd[i + 1] == "aac":
-                    modified_cmd.extend(["-f", "s16le", "-ac", "2", "-ar", "44100", "pipe:1"])
+                    modified_cmd.extend(["-f", "s16le", "-ac", str(channels), "-ar", str(sample_rate), "pipe:1"])
                     skip_next = True
                 else:
                     modified_cmd.append(arg)
