@@ -7,6 +7,7 @@ from typing import Any
 
 from frigate.const import PROCESS_PRIORITY_LOW
 from frigate.log import LogPipe
+from frigate.util.faac import resolve_faac_path
 
 
 def stop_ffmpeg(ffmpeg_process: sp.Popen[Any], logger: logging.Logger):
@@ -48,6 +49,11 @@ def start_or_restart_ffmpeg(
 ) -> sp.Popen[Any]:
     if ffmpeg_process is not None:
         stop_ffmpeg(ffmpeg_process, logger)
+
+    # Check if FAAC is available for AAC encoding workflows
+    faac_binary = resolve_faac_path("default")
+    if faac_binary and any(arg == "aac" for arg in ffmpeg_cmd):
+        logger.debug("FAAC encoder available at %s for AAC audio encoding", faac_binary)
 
     if frame_size is None:
         process = sp.Popen(
