@@ -7,7 +7,7 @@ from typing import Any
 
 from frigate.const import PROCESS_PRIORITY_LOW
 from frigate.log import LogPipe
-from frigate.util.faac import resolve_faac_path
+from frigate.util.faac import build_faac_cmd, resolve_faac_path
 
 
 def stop_ffmpeg(ffmpeg_process: sp.Popen[Any], logger: logging.Logger):
@@ -50,10 +50,53 @@ def start_or_restart_ffmpeg(
     if ffmpeg_process is not None:
         stop_ffmpeg(ffmpeg_process, logger)
 
-    # Check if FAAC is available for AAC encoding workflows
+    # If AAC audio encoding is requested in output args (e.g. preset-record-generic-audio-aac)
+    # and FAAC binary is available, launch the 2-stage FFmpeg PCM -> FAAC AAC process pipe
     faac_binary = resolve_faac_path("default")
     if faac_binary and any(arg == "aac" for arg in ffmpeg_cmd):
-        logger.debug("FAAC encoder available at %s for AAC audio encoding", faac_binary)
+        try:
+            logger.info("Using FAAC encoder at %s for AAC audio output", faac_binary)
+            # Create FAAC command for raw stdin PCM input
+            faac_cmd = build_faac_cmd(
+                faac_path=faac_binary,
+                bitrate=64,
+                object_type="auto",
+                adts=True,
+                output_file="-",
+                input_file="-",
+            )
+            # Replace -c:a aac with -f s16le -ac 2 -ar 44100 pipe:1 for direct stdout piping to FAAC
+            modified_cmd = []
+            skip_next = False
+            for i, arg in enumerate(ffmpeg_cmd):
+                if skip_next:
+                    skip_next = False
+                    continue
+                if arg == "-c:a" and i + 1 < len(ffmpeg_cmd) and ffmpeg_cmd[i + 1] == "aac":
+                    modified_cmd.extend(["-f", "s16le", "-ac", "2", "-ar", "44100", "pipe:1"])
+                    skip_next = True
+                else:
+                    modified_cmd.append(arg)
+
+            ffmpeg_proc = sp.Popen(
+                modified_cmd,
+                stdout=sp.PIPE,
+                stderr=logpipe,
+                stdin=sp.DEVNULL,
+                start_new_session=True,
+            )
+            sp.Popen(
+                faac_cmd,
+                stdin=ffmpeg_proc.stdout,
+                stdout=sp.DEVNULL,
+                stderr=logpipe,
+                start_new_session=True,
+            )
+            if ffmpeg_proc.stdout is not None:
+                ffmpeg_proc.stdout.close()
+            return ffmpeg_proc
+        except Exception as err:
+            logger.warning("Failed to launch FAAC process pipeline, falling back to FFmpeg: %s", err)
 
     if frame_size is None:
         process = sp.Popen(
