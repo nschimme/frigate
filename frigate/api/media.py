@@ -49,6 +49,7 @@ from frigate.const import (
 from frigate.models import Event, Previews, Recordings, Regions, ReviewSegment
 from frigate.output.preview import get_most_recent_preview_frame
 from frigate.track.object_processing import TrackedObjectProcessor
+from frigate.util.audio import get_aac_audio_from_recording
 from frigate.util.ffmpeg import terminate_ffmpeg_stream
 from frigate.util.file import (
     get_event_snapshot_bytes,
@@ -617,6 +618,56 @@ async def recording_clip(
     return StreamingResponse(
         _run_clip_download(ffmpeg_cmd, file_path),
         media_type="video/mp4",
+    )
+
+
+@router.get(
+    "/{camera_name}/start/{start_ts}/end/{end_ts}/audio.aac",
+    dependencies=[Depends(require_camera_access)],
+    description="Returns AAC audio extracted from camera recordings for the specified timestamp range, encoded via FAAC.",
+)
+async def recording_audio_aac(
+    request: Request,
+    camera_name: str,
+    start_ts: float,
+    end_ts: float,
+    bitrate: int = Query(default=64, description="Target average bitrate in kbps"),
+    object_type: str = Query(default="auto", enum=["auto", "he-aac-v1", "lc"]),
+):
+    if camera_name not in request.app.frigate_config.cameras:
+        return JSONResponse(
+            content={"success": False, "message": "Camera not found"},
+            status_code=404,
+        )
+
+    config: FrigateConfig = request.app.frigate_config
+    aac_bytes = await asyncio.to_thread(
+        get_aac_audio_from_recording,
+        config.ffmpeg,
+        camera_name,
+        start_ts,
+        end_ts,
+        sample_rate=16000,
+        bitrate=bitrate,
+        object_type=object_type,
+    )
+
+    if not aac_bytes:
+        return JSONResponse(
+            content={
+                "success": False,
+                "message": "No audio found or FAAC encoding failed for the specified time range",
+            },
+            status_code=404,
+        )
+
+    file_name = sanitize_filename(f"audio_{camera_name}_{start_ts}-{end_ts}.aac")
+    return Response(
+        content=aac_bytes,
+        media_type="audio/aac",
+        headers={
+            "Content-Disposition": f"attachment; filename={file_name}",
+        },
     )
 
 

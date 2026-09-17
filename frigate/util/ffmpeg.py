@@ -7,6 +7,7 @@ from typing import Any
 
 from frigate.const import PROCESS_PRIORITY_LOW
 from frigate.log import LogPipe
+from frigate.util.faac import build_faac_cmd, resolve_faac_path
 
 
 def stop_ffmpeg(ffmpeg_process: sp.Popen[Any], logger: logging.Logger):
@@ -43,11 +44,83 @@ def terminate_ffmpeg_stream(proc: sp.Popen[Any]) -> None:
             proc.wait()
 
 
+def _parse_audio_params_from_cmd(ffmpeg_cmd: list[str]) -> tuple[int, int]:
+    """Dynamically parse sample_rate (-ar) and channels (-ac) from ffmpeg args if present."""
+    sample_rate = 16000
+    channels = 1
+
+    for i, arg in enumerate(ffmpeg_cmd):
+        if arg == "-ar" and i + 1 < len(ffmpeg_cmd):
+            try:
+                sample_rate = int(ffmpeg_cmd[i + 1])
+            except ValueError:
+                pass
+        elif arg == "-ac" and i + 1 < len(ffmpeg_cmd):
+            try:
+                channels = int(ffmpeg_cmd[i + 1])
+            except ValueError:
+                pass
+
+    return sample_rate, channels
+
+
 def start_or_restart_ffmpeg(
     ffmpeg_cmd, logger, logpipe: LogPipe, frame_size=None, ffmpeg_process=None
 ) -> sp.Popen[Any]:
     if ffmpeg_process is not None:
         stop_ffmpeg(ffmpeg_process, logger)
+
+    # If AAC audio encoding is requested in output args (e.g. preset-record-generic-audio-aac)
+    # and FAAC binary is available, launch the 2-stage FFmpeg PCM -> FAAC AAC process pipe
+    faac_binary = resolve_faac_path("default")
+    if faac_binary and any(arg == "aac" for arg in ffmpeg_cmd):
+        try:
+            sample_rate, channels = _parse_audio_params_from_cmd(ffmpeg_cmd)
+            logger.info("Using FAAC encoder at %s for AAC audio output (sample_rate=%d, channels=%d)", faac_binary, sample_rate, channels)
+
+            # Create FAAC command dynamically configured with stream sample_rate and channels
+            faac_cmd = build_faac_cmd(
+                faac_path=faac_binary,
+                bitrate=64,
+                object_type="auto",
+                adts=True,
+                output_file="-",
+                input_file="-",
+                sample_rate=sample_rate,
+                channels=channels,
+            )
+            # Replace -c:a aac with raw PCM parameters matching sample_rate and channels
+            modified_cmd = []
+            skip_next = False
+            for i, arg in enumerate(ffmpeg_cmd):
+                if skip_next:
+                    skip_next = False
+                    continue
+                if arg == "-c:a" and i + 1 < len(ffmpeg_cmd) and ffmpeg_cmd[i + 1] == "aac":
+                    modified_cmd.extend(["-f", "s16le", "-ac", str(channels), "-ar", str(sample_rate), "pipe:1"])
+                    skip_next = True
+                else:
+                    modified_cmd.append(arg)
+
+            ffmpeg_proc = sp.Popen(
+                modified_cmd,
+                stdout=sp.PIPE,
+                stderr=logpipe,
+                stdin=sp.DEVNULL,
+                start_new_session=True,
+            )
+            sp.Popen(
+                faac_cmd,
+                stdin=ffmpeg_proc.stdout,
+                stdout=sp.DEVNULL,
+                stderr=logpipe,
+                start_new_session=True,
+            )
+            if ffmpeg_proc.stdout is not None:
+                ffmpeg_proc.stdout.close()
+            return ffmpeg_proc
+        except Exception as err:
+            logger.warning("Failed to launch FAAC process pipeline, falling back to FFmpeg: %s", err)
 
     if frame_size is None:
         process = sp.Popen(
