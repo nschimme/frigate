@@ -37,6 +37,10 @@ def build_faac_cmd(
     object_type: str = "auto",
     adts: bool = True,
     output_file: str = "-",
+    input_file: str = "-",
+    sample_rate: int = 44100,
+    channels: int = 2,
+    bits_per_sample: int = 16,
     extra_args: list[str] | None = None,
 ) -> list[str]:
     """Build command line arguments for the FAAC encoder.
@@ -47,12 +51,30 @@ def build_faac_cmd(
         object_type: AAC object type ('auto', 'he-aac-v1', 'lc').
         adts: Whether to output ADTS stream format (-a).
         output_file: Output file path or '-' for stdout.
+        input_file: Input file path or '-' for stdin.
+        sample_rate: Sample rate for raw PCM input.
+        channels: Number of channels for raw PCM input.
+        bits_per_sample: Bits per sample for raw PCM input (16, 24, 32).
         extra_args: Additional command line arguments to pass to FAAC.
 
     Returns:
         List of command line tokens for subprocess execution.
     """
     cmd = [resolve_faac_path(faac_path)]
+
+    # Raw PCM input settings if stdin/pipe
+    if input_file == "-":
+        cmd.extend(
+            [
+                "-P",
+                "-R",
+                str(sample_rate),
+                "-B",
+                str(bits_per_sample),
+                "-C",
+                str(channels),
+            ]
+        )
 
     if adts:
         cmd.append("-a")
@@ -66,7 +88,7 @@ def build_faac_cmd(
     if extra_args:
         cmd.extend(extra_args)
 
-    cmd.extend(["-", "-o", output_file])
+    cmd.extend(["-o", output_file, input_file])
     return cmd
 
 
@@ -97,6 +119,7 @@ def encode_audio_with_faac(
         object_type=object_type,
         adts=True,
         output_file="-",
+        input_file="-",
     )
 
     try:
@@ -124,10 +147,10 @@ def pipe_ffmpeg_to_faac(
     ffmpeg_cmd: list[str],
     faac_cmd: list[str],
 ) -> bytes | None:
-    """Pipe uncompressed WAV output from FFmpeg directly into FAAC encoder.
+    """Pipe uncompressed audio directly from FFmpeg into FAAC encoder.
 
     Args:
-        ffmpeg_cmd: FFmpeg command outputting WAV audio to stdout (-f wav -).
+        ffmpeg_cmd: FFmpeg command outputting raw audio to stdout (-f wav - or -f s16le -).
         faac_cmd: FAAC command taking stdin input and outputting ADTS to stdout.
 
     Returns:

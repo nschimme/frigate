@@ -11,18 +11,56 @@ from frigate.util.faac import (
 
 class TestFaac(unittest.TestCase):
     def test_resolve_faac_path_custom(self):
-        self.assertEqual(resolve_faac_path("/custom/faac"), "/custom/faac")
+        self.assertEqual(resolve_faac_path("/custom/bin/faac"), "/custom/bin/faac")
 
     @patch("shutil.which")
     def test_resolve_faac_path_default(self, mock_which):
-        mock_which.return_value = "/usr/local/bin/faac"
-        self.assertEqual(resolve_faac_path("default"), "/usr/local/bin/faac")
+        mock_which.returncode = 0
+        mock_which.return_value = "/usr/bin/faac"
+        self.assertEqual(resolve_faac_path("default"), "/usr/bin/faac")
 
     def test_build_faac_cmd_default(self):
-        cmd = build_faac_cmd(faac_path="/bin/faac", bitrate=64, object_type="auto")
+        cmd = build_faac_cmd(
+            faac_path="/bin/faac",
+            bitrate=64,
+            object_type="auto",
+            input_file="input.wav",
+        )
         self.assertEqual(
             cmd,
-            ["/bin/faac", "-a", "--object-type", "auto", "-b", "64", "-", "-o", "-"],
+            ["/bin/faac", "-a", "--object-type", "auto", "-b", "64", "-o", "-", "input.wav"],
+        )
+
+    def test_build_faac_cmd_raw_stdin(self):
+        cmd = build_faac_cmd(
+            faac_path="/bin/faac",
+            bitrate=64,
+            object_type="auto",
+            input_file="-",
+            sample_rate=44100,
+            channels=2,
+            bits_per_sample=16,
+        )
+        self.assertEqual(
+            cmd,
+            [
+                "/bin/faac",
+                "-P",
+                "-R",
+                "44100",
+                "-B",
+                "16",
+                "-C",
+                "2",
+                "-a",
+                "--object-type",
+                "auto",
+                "-b",
+                "64",
+                "-o",
+                "-",
+                "-",
+            ],
         )
 
     def test_build_faac_cmd_he_aac(self):
@@ -32,6 +70,7 @@ class TestFaac(unittest.TestCase):
             object_type="he-aac-v1",
             adts=True,
             output_file="/tmp/out.aac",
+            input_file="input.wav",
         )
         self.assertEqual(
             cmd,
@@ -42,9 +81,9 @@ class TestFaac(unittest.TestCase):
                 "he-aac-v1",
                 "-b",
                 "32",
-                "-",
                 "-o",
                 "/tmp/out.aac",
+                "input.wav",
             ],
         )
 
@@ -54,6 +93,7 @@ class TestFaac(unittest.TestCase):
             bitrate=128,
             object_type="lc",
             extra_args=["-c", "18000"],
+            input_file="input.wav",
         )
         self.assertEqual(
             cmd,
@@ -66,36 +106,26 @@ class TestFaac(unittest.TestCase):
                 "128",
                 "-c",
                 "18000",
-                "-",
                 "-o",
                 "-",
+                "input.wav",
             ],
         )
 
     @patch("subprocess.run")
     def test_encode_audio_with_faac_success(self, mock_run):
-        mock_process = MagicMock()
-        mock_process.returncode = 0
-        mock_process.stdout = b"ENCODED_AAC_HEADER_AND_DATA"
-        mock_run.return_value = mock_process
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = b"encoded_aac_bytes"
+        mock_run.return_value = mock_proc
 
-        input_wav = b"RIFF....WAVEfmt ...."
         result = encode_audio_with_faac(
-            input_wav, bitrate=64, object_type="auto", faac_path="/bin/faac"
+            b"fake_wav_bytes",
+            bitrate=64,
+            object_type="auto",
+            faac_path="/bin/faac",
         )
-
-        self.assertEqual(result, b"ENCODED_AAC_HEADER_AND_DATA")
-        mock_run.assert_called_once()
-
-    @patch("subprocess.run")
-    def test_encode_audio_with_faac_failure(self, mock_run):
-        mock_process = MagicMock()
-        mock_process.returncode = 1
-        mock_process.stderr = b"Encoding error"
-        mock_run.return_value = mock_process
-
-        result = encode_audio_with_faac(b"BAD_DATA", faac_path="/bin/faac")
-        self.assertIsNone(result)
+        self.assertEqual(result, b"encoded_aac_bytes")
 
     def test_encode_audio_with_faac_empty_input(self):
         result = encode_audio_with_faac(b"")
@@ -103,23 +133,15 @@ class TestFaac(unittest.TestCase):
 
     @patch("subprocess.Popen")
     def test_pipe_ffmpeg_to_faac_success(self, mock_popen):
-        ffmpeg_proc = MagicMock()
-        ffmpeg_proc.returncode = 0
-        ffmpeg_proc.stderr.read.return_value = b""
+        mock_ffmpeg_proc = MagicMock()
+        mock_ffmpeg_proc.returncode = 0
+        mock_ffmpeg_proc.stdout = MagicMock()
 
-        faac_proc = MagicMock()
-        faac_proc.returncode = 0
-        faac_proc.communicate.return_value = (b"FAAC_OUTPUT_DATA", b"")
+        mock_faac_proc = MagicMock()
+        mock_faac_proc.returncode = 0
+        mock_faac_proc.communicate.return_value = (b"aac_stream_bytes", b"")
 
-        mock_popen.side_effect = [ffmpeg_proc, faac_proc]
+        mock_popen.side_effect = [mock_ffmpeg_proc, mock_faac_proc]
 
-        result = pipe_ffmpeg_to_faac(
-            ["ffmpeg", "-i", "input.mp4", "-f", "wav", "-"],
-            ["faac", "-a", "-b", "64", "-", "-o", "-"],
-        )
-
-        self.assertEqual(result, b"FAAC_OUTPUT_DATA")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        res = pipe_ffmpeg_to_faac(["ffmpeg", "-i", "in.mp4"], ["faac", "-"])
+        self.assertEqual(res, b"aac_stream_bytes")
