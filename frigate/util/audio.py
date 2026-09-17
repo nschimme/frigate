@@ -8,7 +8,6 @@ from pathvalidate import sanitize_filename
 
 from frigate.const import CACHE_DIR, STREAM_TYPE_MAIN, STREAM_TYPE_SUB
 from frigate.models import Recordings
-from frigate.util.faac import encode_audio_with_faac
 
 logger = logging.getLogger(__name__)
 
@@ -130,43 +129,3 @@ def get_audio_from_recording(
             os.unlink(file_path)
         except OSError:
             pass
-
-
-def get_aac_audio_from_recording(
-    ffmpeg,
-    camera_name: str,
-    start_ts: float,
-    end_ts: float,
-    sample_rate: int = 16000,
-    bitrate: int = 64,
-    object_type: str = "auto",
-    faac_path: str = "default",
-) -> bytes | None:
-    """Extract audio from recording files and encode to AAC using FAAC.
-
-    Args:
-        ffmpeg: FFmpeg configuration object
-        camera_name: Name of the camera
-        start_ts: Start timestamp in seconds
-        end_ts: End timestamp in seconds
-        sample_rate: Sample rate for extracted audio (default 16kHz)
-        bitrate: FAAC target average bitrate in kbps (default 64kbps)
-        object_type: FAAC AAC object type ('auto', 'he-aac-v1', 'lc')
-        faac_path: Path to FAAC binary or 'default'
-
-    Returns:
-        Bytes of encoded AAC audio data or None if extraction or encoding failed
-    """
-    wav_bytes = get_audio_from_recording(
-        ffmpeg, camera_name, start_ts, end_ts, sample_rate=sample_rate
-    )
-
-    if not wav_bytes:
-        return None
-
-    return encode_audio_with_faac(
-        wav_bytes,
-        bitrate=bitrate,
-        object_type=object_type,
-        faac_path=faac_path,
-    )
